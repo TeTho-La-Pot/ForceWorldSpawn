@@ -1,6 +1,7 @@
 package com.github.TeThoLaPot.ForceWorldSpawn;
 
-import com.github.TeThoLaPot.ForceWorldSpawn.Event.SpawnEventHandler;
+import com.github.TeThoLaPot.ForceWorldSpawn.data.FWS_config;
+import com.github.TeThoLaPot.ForceWorldSpawn.event.SpawnEventHandler;
 import com.mojang.logging.LogUtils;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.common.MinecraftForge;
@@ -8,7 +9,9 @@ import net.minecraftforge.event.BuildCreativeModeTabContentsEvent;
 import net.minecraftforge.event.server.ServerStartingEvent;
 import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.ModLoadingContext;
 import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.config.ModConfig;
 import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
 import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
@@ -29,6 +32,8 @@ public class ForceWorldSpawn {
         MinecraftForge.EVENT_BUS.register(SpawnEventHandler.class);
 
         modEventBus.addListener(this::addCreative);
+
+        ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, FWS_config.SPEC, "fws-common.toml");
     }
 
     private void commonSetup(final FMLCommonSetupEvent event) {

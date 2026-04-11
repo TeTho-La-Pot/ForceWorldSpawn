@@ -1,5 +1,6 @@
-package com.github.TeThoLaPot.ForceWorldSpawn.Event;
+package com.github.TeThoLaPot.ForceWorldSpawn.event;
 
+import com.github.TeThoLaPot.ForceWorldSpawn.utils.FWS_Utils;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.arguments.EntityArgument;
 import net.minecraft.core.BlockPos;
@@ -32,8 +33,10 @@ public class SpawnEventHandler {
 
     @SubscribeEvent
     public static void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
-        if (event.getEntity() instanceof ServerPlayer player) {
-            forceWorldSpawn(player);
+        if (FWS_Utils.FWS_LOGIN == true) {
+            if (event.getEntity() instanceof ServerPlayer player) {
+                forceWorldSpawn(player);
+            }
         }
     }
 
