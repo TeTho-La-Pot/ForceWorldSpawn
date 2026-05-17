@@ -12,18 +12,32 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.block.BedBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraftforge.event.RegisterCommandsEvent;
 import net.minecraftforge.event.entity.player.PlayerEvent;
+import net.minecraftforge.event.entity.player.PlayerSetSpawnEvent;
 import net.minecraft.world.level.Level;
 import net.minecraftforge.event.entity.player.PlayerInteractEvent;
+import net.minecraftforge.eventbus.api.EventPriority;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
 
 @Mod.EventBusSubscriber(modid = "force_world_spawn")
 public class SpawnEventHandler {
+
+    private static final String KEY_SAVED_BED_X = "SavedBedX";
+    private static final String KEY_SAVED_BED_Y = "SavedBedY";
+    private static final String KEY_SAVED_BED_Z = "SavedBedZ";
+    private static final String KEY_SAVED_BED_DIM = "SavedBedDim";
+
+    private static final String KEY_PENDING_BED_X = "FwsPendingBedX";
+    private static final String KEY_PENDING_BED_Y = "FwsPendingBedY";
+    private static final String KEY_PENDING_BED_Z = "FwsPendingBedZ";
+    private static final String KEY_PENDING_BED_DIM = "FwsPendingBedDim";
+    private static final String KEY_PENDING_BED_TIME = "FwsPendingBedTime";
 
     @SubscribeEvent
     public static void onPlayerRespawn(PlayerEvent.PlayerRespawnEvent event) {
@@ -65,16 +79,63 @@ public class SpawnEventHandler {
 
         if (FWS_Utils.FWS_ENABLE) {
             BlockState state = event.getLevel().getBlockState(event.getPos());
-            if (state.getBlock() instanceof BedBlock) {
-                CompoundTag data = event.getEntity().getPersistentData();
-                BlockPos pos = event.getPos();
+            if (!(state.getBlock() instanceof BedBlock)) return;
 
-                data.putInt("SavedBedX", pos.getX());
-                data.putInt("SavedBedY", pos.getY());
-                data.putInt("SavedBedZ", pos.getZ());
-                data.putString("SavedBedDim", event.getLevel().dimension().location().toString());
-            }
+            // Right-clickだけでは確定保存しない:
+            // まず候補として座標を保持し、実際にスポーンが更新された(PlayerSetSpawnEvent)時だけ確定する。
+            CompoundTag data = event.getEntity().getPersistentData();
+            BlockPos pos = event.getPos();
+
+            data.putInt(KEY_PENDING_BED_X, pos.getX());
+            data.putInt(KEY_PENDING_BED_Y, pos.getY());
+            data.putInt(KEY_PENDING_BED_Z, pos.getZ());
+            data.putString(KEY_PENDING_BED_DIM, event.getLevel().dimension().location().toString());
+            data.putLong(KEY_PENDING_BED_TIME, event.getLevel().getGameTime());
         }
+    }
+
+    @SubscribeEvent(priority = EventPriority.LOWEST)
+    public static void onPlayerSetSpawn(PlayerSetSpawnEvent event) {
+        if (!FWS_Utils.FWS_ENABLE) return;
+        if (!(event.getEntity() instanceof ServerPlayer player)) return;
+
+        CompoundTag data = player.getPersistentData();
+
+        // スポーンが「解除」された場合は、保存済みベッド座標も解除する
+        if (event.getNewSpawn() == null) {
+            clearSavedBed(data);
+            clearPendingBed(data);
+            return;
+        }
+
+        // スポーンが設定された場合は、その座標をベッド座標として確定保存する。
+        // 寝袋のようにスポーンが変わらないケースは、このイベント自体が発火しない想定。
+        ResourceKey<Level> spawnLevel = event.getSpawnLevel();
+        ServerLevel level = player.getServer() == null ? null : player.getServer().getLevel(spawnLevel);
+        BlockPos newSpawn = event.getNewSpawn();
+
+        if (level != null && level.getBlockState(newSpawn).getBlock() instanceof BedBlock) {
+            data.putInt(KEY_SAVED_BED_X, newSpawn.getX());
+            data.putInt(KEY_SAVED_BED_Y, newSpawn.getY());
+            data.putInt(KEY_SAVED_BED_Z, newSpawn.getZ());
+            data.putString(KEY_SAVED_BED_DIM, spawnLevel.location().toString());
+        } else if (!isModForcedWorldSpawn(level, newSpawn)) {
+            // リスポーンアンカー等へ切り替えた場合のみクリア（MODのワールドスポーン固定は対象外）
+            clearSavedBed(data);
+        }
+
+        clearPendingBed(data);
+    }
+
+    /**
+     * forceWorldSpawn が設定するワールドスポーンと同じ座標か。
+     * 死亡リスポーン時に PlayerSetSpawnEvent が複数回飛んでも tpbed 用データを消さない。
+     */
+    private static boolean isModForcedWorldSpawn(ServerLevel level, BlockPos spawnPos) {
+        if (level == null || spawnPos == null) {
+            return false;
+        }
+        return level.dimension() == Level.OVERWORLD && spawnPos.equals(level.getSharedSpawnPos());
     }
 
     @SubscribeEvent
@@ -130,25 +191,33 @@ public class SpawnEventHandler {
     private static int executeBedTeleport(CommandSourceStack source, ServerPlayer target) {
         CompoundTag data = target.getPersistentData();
 
-        if (data.contains("SavedBedX")) {
-            int x = data.getInt("SavedBedX");
-            int y = data.getInt("SavedBedY");
-            int z = data.getInt("SavedBedZ");
-            String dim = data.getString("SavedBedDim");
+        if (data.contains(KEY_SAVED_BED_X)) {
+            int x = data.getInt(KEY_SAVED_BED_X);
+            int y = data.getInt(KEY_SAVED_BED_Y);
+            int z = data.getInt(KEY_SAVED_BED_Z);
+            String dim = data.getString(KEY_SAVED_BED_DIM);
 
             ServerLevel level = source.getServer().getLevel(
                     ResourceKey.create(Registries.DIMENSION, new ResourceLocation(dim)));
 
             BlockPos bedPos = new BlockPos(x, y, z);
 
-            if (level != null && level.getBlockState(bedPos).getBlock() instanceof BedBlock) {
-                target.teleportTo(level, x + 0.5, y + 1.0, z + 0.5, target.getYRot(), target.getXRot());
-                source.sendSuccess(() -> Component.literal(target.getName().getString() + " を保存されたベッドへ飛ばしました"), true);
-                return 1;
-            } else {
+            if (level == null || !(level.getBlockState(bedPos).getBlock() instanceof BedBlock)) {
                 source.sendFailure(Component.literal("登録された座標にベッドが存在しません (壊された可能性があります)"));
                 return 0;
             }
+
+            // バニラと同じ「安全なリスポーン位置」を計算してテレポートする
+            var safe = Player.findRespawnPositionAndUseSpawnBlock(level, bedPos, 0.0F, true, false);
+            if (safe.isPresent()) {
+                var pos = safe.get();
+                target.teleportTo(level, pos.x, pos.y, pos.z, target.getYRot(), target.getXRot());
+                source.sendSuccess(() -> Component.literal(target.getName().getString() + " を保存されたベッドへ飛ばしました"), true);
+                return 1;
+            }
+
+            source.sendFailure(Component.literal("ベッド周辺が塞がっていて安全なテレポート位置が見つかりません"));
+            return 0;
         } else {
             source.sendFailure(Component.literal(target.getName().getString() + " のベッド座標データが見つかりません"));
             return 0;
@@ -169,19 +238,32 @@ public class SpawnEventHandler {
         return 0;
     }
 
-    @SubscribeEvent
+    @SubscribeEvent(priority = EventPriority.LOWEST)
     public static void onPlayerClone(PlayerEvent.Clone event) {
-        if (event.isWasDeath()) {
-            CompoundTag oldData = event.getOriginal().getPersistentData();
-            CompoundTag newData = event.getEntity().getPersistentData();
+        CompoundTag oldData = event.getOriginal().getPersistentData();
+        CompoundTag newData = event.getEntity().getPersistentData();
 
-            if (oldData.contains("SavedBedX")) {
-                newData.putInt("SavedBedX", oldData.getInt("SavedBedX"));
-                newData.putInt("SavedBedY", oldData.getInt("SavedBedY"));
-                newData.putInt("SavedBedZ", oldData.getInt("SavedBedZ"));
-                newData.putString("SavedBedDim", oldData.getString("SavedBedDim"));
-            }
+        if (oldData.contains(KEY_SAVED_BED_X)) {
+            newData.putInt(KEY_SAVED_BED_X, oldData.getInt(KEY_SAVED_BED_X));
+            newData.putInt(KEY_SAVED_BED_Y, oldData.getInt(KEY_SAVED_BED_Y));
+            newData.putInt(KEY_SAVED_BED_Z, oldData.getInt(KEY_SAVED_BED_Z));
+            newData.putString(KEY_SAVED_BED_DIM, oldData.getString(KEY_SAVED_BED_DIM));
         }
+    }
+
+    private static void clearPendingBed(CompoundTag data) {
+        data.remove(KEY_PENDING_BED_X);
+        data.remove(KEY_PENDING_BED_Y);
+        data.remove(KEY_PENDING_BED_Z);
+        data.remove(KEY_PENDING_BED_DIM);
+        data.remove(KEY_PENDING_BED_TIME);
+    }
+
+    private static void clearSavedBed(CompoundTag data) {
+        data.remove(KEY_SAVED_BED_X);
+        data.remove(KEY_SAVED_BED_Y);
+        data.remove(KEY_SAVED_BED_Z);
+        data.remove(KEY_SAVED_BED_DIM);
     }
 
 
